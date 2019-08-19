@@ -16,6 +16,8 @@ Compilation and installation can be performed via:
 
     git clone https://github.com/dpryan79/MethylDackel.git
     cd MethylDackel
+    git submodule init
+    git submodule update
     make
     make install prefix=/some/installation/path
 
