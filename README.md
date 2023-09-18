@@ -69,7 +69,7 @@ It's important to think about the above possibilities in conjunction with the `-
 Single Cytosine methylation metrics extraction
 ==============================================
 
-`MethylDackel extract` produces a variant of [bedGraph](http://genome.ucsc.edu/goldenpath/help/bedgraph.html) that's similar to the "coverage" file produced by [Bismark](http://www.bioinformatics.babraham.ac.uk/projects/bismark/) and [Bison](https://github.com/dpryan79/bison). In short, each line consists of 6 tab separated columns:
+`MethylDackel extract` produces a variant of [bedGraph](http://genome.ucsc.edu/goldenpath/help/bedgraph.html) that's similar to the "coverage" file produced by [Bismark](http://www.bioinformatics.babraham.ac.uk/projects/bismark/) and [Bison](https://github.com/dpryan79/bison) by default. In short, each line consists of 6 tab separated columns:
 
 1. The chromosome/contig/scaffold name
 2. The start coordinate
@@ -87,6 +87,8 @@ An example of the output is below:
     1	29336	29337	50	1	1
 
 Note the header line, which starts with "track". The "description" field is used as a label in programs such as [IGV](http://www.broadinstitute.org/igv/). Each of the subsequent lines describe single Cytosines, the 25116th and 29337th base on chromosome 1, respectively. The first position has 3 alignments (or pairs of alignments) indicating methylation and 0 indicating unmethylation (100% methylation) and the second position has 1 alignment each supporting methylation and unmethylation (50% methylation).
+
+A line is printed if either strand is in the specified context. CpG is symmetrical, so this only applies to CHH and CHG context files.
 
 Per-CpG/CHG metrics
 ===================
@@ -131,6 +133,23 @@ methylKit-compatible output
 ===========================
 
 methylKit has its own format, which can be produced with the `--methylKit` option. Merging Cs into CpGs or CHGs is forbidden in this format. Likewise, this option is mutually exclusive with `--logit` et al.
+
+cytosine_report output
+======================
+
+It is posisble to output a report similar to Bismark's cytosine report with the ```--cytosine_report``` option.
+> A per-base exhaustive report comparable to that produced
+> with the same option in Bismark's methylation extractor. The
+> output is a tab-separated file with the following columns:
+> chromosome, position (1-based), strand, number of alignments
+> supporting methylation, number of alignments supporting
+> unmethylation, CG/CHG/CHH, trinucleotide context. This is not
+> compatible with --fraction, --counts, --methylKit, or
+> --mergeContext. The produces a single file with a
+> .cytosine_report.txt extension. Note that even bases with no
+> coverage will be included in the output.
+
+Note: this file contains all C's, regardless of coverage or filters (~55M lines for the GRCh38 human reference genome)
 
 Excluding likely variant sites
 ==============================
