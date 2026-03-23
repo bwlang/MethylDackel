@@ -20,6 +20,10 @@ extern uint32_t globalEnd;
 extern uint32_t bin;
 extern uint32_t outputBin;
 extern uint64_t globalnVariantPositions;
+// Per-contig per-context summary accumulators (indexed [tid*3 + context])
+// context: 0=CpG, 1=CHG, 2=CHH
+extern uint64_t *globalSummaryMeth;
+extern uint64_t *globalSummaryUnmeth;
 
 /*! @typedef
  @abstract Structure to hold one region defined in a BED file
@@ -123,6 +127,8 @@ typedef struct {
     int nThreads;
     char noBAM;
     unsigned long chunkSize;
+    int summary;        // 1: write per-contig per-context summary
+    FILE *summary_fp;   // output file for summary (NULL = stdout)
 } Config;
 
 /*! @typedef
@@ -185,6 +191,16 @@ bedRegions *parseBED(char *fn, bam_hdr_t *hdr, int keepStrand);
 
 //pileup.c
 int cust_mplp_auto(bam_mplp_t iter, int *_tid, int *_pos, int *n_plp, const bam_pileup1_t **plp);
+
+/*! @function
+ @abstract Compute an Agresti-Coull confidence interval bound for a proportion
+ @param um   Number of unmethylated observations
+ @param m    Number of methylated observations
+ @param which  1 = upper bound, 0 = lower bound
+ @param z    z-score for the desired confidence level (e.g. 1.96 for 95%)
+ @returns    The requested CI bound in [0, 1]
+*/
+double CI(uint32_t um, uint32_t m, int which, double z);
 
 //svg.c
 /*! @function

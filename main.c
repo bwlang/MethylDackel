@@ -13,6 +13,8 @@ uint32_t globalEnd = 0;
 uint32_t bin = 0;
 uint32_t outputBin = 0;
 uint64_t globalnVariantPositions = 0;
+uint64_t *globalSummaryMeth = NULL;
+uint64_t *globalSummaryUnmeth = NULL;
 
 int mbias_main(int argc, char *argv[]);
 int extract_main(int argc, char *argv[]);

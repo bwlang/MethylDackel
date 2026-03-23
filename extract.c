@@ -256,6 +256,8 @@ void *extractCalls(void *foo) {
     uint32_t nmethyl = 0, nunmethyl = 0, nOff = 0, nVariant = 0;
     uint32_t localBin = 0, localPos = 0, localEnd = 0, localTid = 0, localPos2 = 0, lastPos = 0;
     uint64_t nVariantPositions = 0;
+    uint64_t localSummaryMeth[3] = {0, 0, 0};
+    uint64_t localSummaryUnmeth[3] = {0, 0, 0};
     const bam_pileup1_t **plp = NULL;
     char *seq = NULL, base = 'A';
     char context[3] = "HG";
@@ -323,6 +325,10 @@ void *extractCalls(void *foo) {
     }
 
     while(1) {
+        if(config->summary) {
+            localSummaryMeth[0] = localSummaryMeth[1] = localSummaryMeth[2] = 0;
+            localSummaryUnmeth[0] = localSummaryUnmeth[1] = localSummaryUnmeth[2] = 0;
+        }
         //Lock and unlock the mutex so we can get/update the tid/position
         pthread_mutex_lock(&positionMutex);
         localBin = bin++;
@@ -459,6 +465,13 @@ void *extractCalls(void *foo) {
             }
 
             if(nmethyl+nunmethyl==0 && config->cytosine_report == 0) continue;
+
+            // Accumulate for per-contig per-context summary
+            if(config->summary) {
+                localSummaryMeth[type] += nmethyl;
+                localSummaryUnmeth[type] += nunmethyl;
+            }
+
             if(!config->merge || type==2) { //Also, cytosine report
                 if(config->cytosine_report) {
                     writeBlank(os, config, hdr->target_name[localTid], pos, localPos2, &lastPos, seq, seqlen);
@@ -529,6 +542,13 @@ void *extractCalls(void *foo) {
                 fputs(os_CHH->s, config->output_fp[2]);
                 os_CHH->l = 0;
             }
+            if(config->summary && localTid < (uint32_t) hdr->n_targets) {
+                int k;
+                for(k = 0; k < 3; k++) {
+                    globalSummaryMeth[localTid * 3 + k] += localSummaryMeth[k];
+                    globalSummaryUnmeth[localTid * 3 + k] += localSummaryUnmeth[k];
+                }
+            }
             outputBin++;
             pthread_mutex_unlock(&outputMutex);
             break;
@@ -557,6 +577,53 @@ void *extractCalls(void *foo) {
         pthread_mutex_unlock(&outputMutex);
     }
     return NULL;
+}
+
+// Agresti-Coull CI using double precision for large counts (millions+).
+// z: z-score (e.g. 1.959964 for 95%, 2.575829 for 99%)
+// which: 1 = upper bound, 0 = lower bound
+static double CI_large(uint64_t u, uint64_t m, int which, double z) {
+    double N = (double)(m + u);
+    double X = (double)m;
+    double ZZ = z * z;
+    double N_dot = N + ZZ;
+    double P_dot = (X + 0.5 * ZZ) / N_dot;
+    double rv;
+    if(which) {
+        rv = P_dot + z * sqrt((P_dot / N_dot) * (1.0 - P_dot));
+        if(rv > 1.0) rv = 1.0;
+    } else {
+        rv = P_dot - z * sqrt((P_dot / N_dot) * (1.0 - P_dot));
+        if(rv < 0.0) rv = 0.0;
+    }
+    return rv;
+}
+
+// Write per-contig per-context summary with Agresti-Coull 95% confidence intervals.
+// Columns: contig, context, methylated, unmethylated, fraction, ci_lower, ci_upper
+void writeSummary(Config *config, bam_hdr_t *hdr) {
+    FILE *of = config->summary_fp ? config->summary_fp : stdout;
+    const double Z95 = 1.959963985; // qnorm(0.975) for 95% CI
+    const char *ctxNames[3] = {"CpG", "CHG", "CHH"};
+    int keep[3];
+    keep[0] = config->keepCpG;
+    keep[1] = config->keepCHG;
+    keep[2] = config->keepCHH;
+
+    fprintf(of, "contig\tcontext\tmethylated\tunmethylated\tfraction\tci_lower\tci_upper\n");
+    for(int tid = 0; tid < hdr->n_targets; tid++) {
+        for(int ctx = 0; ctx < 3; ctx++) {
+            if(!keep[ctx]) continue;
+            uint64_t m = globalSummaryMeth[tid * 3 + ctx];
+            uint64_t u = globalSummaryUnmeth[tid * 3 + ctx];
+            if(m + u == 0) continue;
+            double frac = (double) m / (double)(m + u);
+            double lo = CI_large(u, m, 0, Z95);
+            double hi = CI_large(u, m, 1, Z95);
+            fprintf(of, "%s\t%s\t%"PRIu64"\t%"PRIu64"\t%.6f\t%.6f\t%.6f\n",
+                    hdr->target_name[tid], ctxNames[ctx], m, u, frac, lo, hi);
+        }
+    }
 }
 
 void printHeader(FILE *of, char *context, char *opref, Config config) {
@@ -700,6 +767,11 @@ void extract_usage() {
 "                  complementary to the original top, and complementary to the\n"
 "                  original bottom strands, respectively.\n"
 " --version        Print version and then quit.\n"
+" --summary [FILE] Output a per-contig per-context methylation summary with\n"
+"                  Agresti-Coull 95%% confidence intervals. Columns: contig,\n"
+"                  context, methylated, unmethylated, fraction, ci_lower,\n"
+"                  ci_upper. If FILE is given the summary is written there,\n"
+"                  otherwise it goes to stdout.\n"
 "\nNote that --fraction, --counts, and --logit are mutually exclusive!\n");
 }
 
@@ -710,6 +782,9 @@ int extract_main(int argc, char *argv[]) {
     bam_hdr_t *hdr = NULL;
 
     globalTid = globalPos = globalEnd = bin = globalnVariantPositions = 0;
+    outputBin = 0;
+    globalSummaryMeth = NULL;
+    globalSummaryUnmeth = NULL;
 
     //Defaults
     config.outputBB = 0;
@@ -749,6 +824,8 @@ int extract_main(int argc, char *argv[]) {
     config.cytosine_report = 0;
     config.noBAM = 0;
     config.minConversionEfficiency = 0.0;
+    config.summary = 0;
+    config.summary_fp = NULL;
     for(i=0; i<16; i++) config.bounds[i] = 0;
     for(i=0; i<16; i++) config.absoluteBounds[i] = 0;
 
@@ -791,6 +868,7 @@ int extract_main(int argc, char *argv[]) {
         {"outputBBMFile",         1, NULL,  'O'},
         {"outputBBMFileName",         1, NULL,  'N'},
         {"mappabilityBBM",         1, NULL,  'B'},
+        {"summary",      2, NULL,  24},
         {0,              0, NULL,   0}
     };
     while((c = getopt_long(argc, argv, "hvq:p:r:l:o:D:f:c:m:d:F:R:@:M:t:b:ON:B:", lopts,NULL)) >=0){
@@ -892,6 +970,16 @@ int extract_main(int argc, char *argv[]) {
             break;
         case 23:
             config.ignoreNH = 1;
+            break;
+        case 24:
+            config.summary = 1;
+            if(optarg) {
+                config.summary_fp = fopen(optarg, "w");
+                if(!config.summary_fp) {
+                    fprintf(stderr, "Couldn't open summary file '%s' for writing!\n", optarg);
+                    return -1;
+                }
+            }
             break;
         case 'M':
             config.BWName = optarg;
@@ -1475,6 +1563,30 @@ int extract_main(int argc, char *argv[]) {
             return 1;
         }
     }
+    // Allocate per-contig per-context summary accumulators when requested.
+    // Open a fresh file handle so we don't disturb config.fp's position (the
+    // header may already have been consumed by the -r/-l parsing above).
+    bam_hdr_t *summaryHdr = NULL;
+    if(config.summary) {
+        htsFile *tmpfp = hts_open(config.BAMName, "rb");
+        if(!tmpfp) {
+            fprintf(stderr, "Couldn't open BAM for summary header read!\n");
+            return -1;
+        }
+        summaryHdr = sam_hdr_read(tmpfp);
+        hts_close(tmpfp);
+        if(!summaryHdr) {
+            fprintf(stderr, "Couldn't read BAM header for summary allocation!\n");
+            return -1;
+        }
+        globalSummaryMeth   = calloc(summaryHdr->n_targets * 3, sizeof(uint64_t));
+        globalSummaryUnmeth = calloc(summaryHdr->n_targets * 3, sizeof(uint64_t));
+        if(!globalSummaryMeth || !globalSummaryUnmeth) {
+            fprintf(stderr, "Couldn't allocate memory for summary accumulators!\n");
+            return -1;
+        }
+    }
+
     //Run the pileup
     pthread_mutex_init(&positionMutex, NULL);
     pthread_mutex_init(&bwMutex, NULL);
@@ -1487,6 +1599,17 @@ int extract_main(int argc, char *argv[]) {
 
     //If we've filtered out variant sites
     if(globalnVariantPositions) printf("%"PRIu64" positions were excluded due to likely being variants.\n", globalnVariantPositions);
+
+    // Write per-contig per-context summary
+    if(config.summary && summaryHdr) {
+        writeSummary(&config, summaryHdr);
+        bam_hdr_destroy(summaryHdr);
+        free(globalSummaryMeth);
+        free(globalSummaryUnmeth);
+        globalSummaryMeth = NULL;
+        globalSummaryUnmeth = NULL;
+        if(config.summary_fp) fclose(config.summary_fp);
+    }
     //Close things up
     hts_close(config.fp);
     if(config.cytosine_report) fclose(config.output_fp[0]);

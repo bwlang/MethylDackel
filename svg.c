@@ -6,21 +6,21 @@
 #include <math.h>
 
 //Agresti-Coull confidence interval around a methylation value
-//If which is 1, return the upper 99.9% CI, otherwise the return the lower 99.9% CI
-double CI(uint32_t um, uint32_t m, int which) {
-    double ZZ, Z, N_dot, P_dot, X, N, rv;
+//If which is 1, return the upper CI, otherwise return the lower CI
+//z is the z-score for the desired confidence level (e.g. 1.959964 for 95%, 3.290527 for 99.9%)
+double CI(uint32_t um, uint32_t m, int which, double z) {
+    double ZZ, N_dot, P_dot, X, N, rv;
 
     X = (double) m;
     N = (double) (m+um);
-    ZZ = 10.8275661707; //qnorm(0.9995)^2
-    Z = 3.2905267315; //qnorm(0.9995)
+    ZZ = z * z;
     N_dot = N + ZZ;
     P_dot = (1.0/N_dot)*(X+0.5*ZZ);
     if(which) {
-        rv = P_dot + Z*sqrt((P_dot/N_dot)*(1-P_dot));
+        rv = P_dot + z*sqrt((P_dot/N_dot)*(1-P_dot));
         if(rv>1.) rv = 1.0;
     } else {
-        rv = P_dot - Z*sqrt((P_dot/N_dot)*(1-P_dot));
+        rv = P_dot - z*sqrt((P_dot/N_dot)*(1-P_dot));
         if(rv<0.) rv = 0.0;
     }
     return rv;
@@ -33,11 +33,11 @@ double getMaxY(strandMeth *m) {
 
     for(i=0; i<m->l; i++) {
         if(m->meth1[i]+m->unmeth1[i]) {
-            val = CI(m->unmeth1[i], m->meth1[i], 1);
+            val = CI(m->unmeth1[i], m->meth1[i], 1, 3.2905267315);
             maximum = (val > maximum) ? val : maximum;
         }
         if(m->meth2[i]+m->unmeth2[i]) {
-            val = CI(m->unmeth2[i], m->meth2[i], 1);
+            val = CI(m->unmeth2[i], m->meth2[i], 1, 3.2905267315);
             maximum = (val > maximum) ? val : maximum;
         }
     }
@@ -62,11 +62,11 @@ double getMinY(strandMeth *m) {
 
     for(i=0; i<m->l; i++) {
         if(m->meth1[i]+m->unmeth1[i]) {
-            val = CI(m->unmeth1[i], m->meth1[i], 0);
+            val = CI(m->unmeth1[i], m->meth1[i], 0, 3.2905267315);
             minimum = (val < minimum) ? val : minimum;
         }
         if(m->meth2[i]+m->unmeth2[i]) {
-            val = CI(m->unmeth2[i], m->meth2[i], 0);
+            val = CI(m->unmeth2[i], m->meth2[i], 0, 3.2905267315);
             minimum = (val < minimum) ? val : minimum;
         }
     }
@@ -185,17 +185,17 @@ void plotCI(FILE *of, int minX, int maxX, strandMeth *m, int which, char *col, i
     }
 
     //Start the path
-    val = CI(umeth[minX], meth[minX], 0);
+    val = CI(umeth[minX], meth[minX], 0, 3.2905267315);
     fprintf(of, "<path d=\"M %f %f\n", remapX(minX+1, maxX, buffer,dim), remapY(val, minY, maxY, buffer, dim));
     for(i=minX+1; i<=m->l; i++) {
         if(meth[i]||umeth[i]) {
-            val = CI(umeth[i], meth[i], 0);
+            val = CI(umeth[i], meth[i], 0, 3.2905267315);
             fprintf(of, "  L %f %f\n", remapX(i+1, maxX, buffer,dim), remapY(val, minY, maxY, buffer, dim));
         }
     }
     for(i=m->l-1; i>=0; i--) {
         if(meth[i]||umeth[i]) {
-            val = CI(umeth[i], meth[i], 1);
+            val = CI(umeth[i], meth[i], 1, 3.2905267315);
             fprintf(of, "  L %f %f\n", remapX(i+1, maxX, buffer,dim), remapY(val, minY, maxY, buffer, dim));
         }
     }
@@ -255,9 +255,9 @@ void getThresholds(strandMeth *m, int which, int *lthresh, int *rthresh) {
         if(meth[i] || umeth[i]) {
             total++;
             average += ((double) meth[i])/((double)(meth[i]+umeth[i]));
-            tmp = CI(umeth[i], meth[i], 1);
+            tmp = CI(umeth[i], meth[i], 1, 3.2905267315);
             if(minCI > tmp) minCI = tmp;
-            tmp = CI(umeth[i], meth[i], 0);
+            tmp = CI(umeth[i], meth[i], 0, 3.2905267315);
             if(maxCI < tmp) maxCI = tmp;
         }
     }
@@ -272,9 +272,9 @@ void getThresholds(strandMeth *m, int which, int *lthresh, int *rthresh) {
     for(i=middle; i>=0; i--) {
         if(meth[i] || umeth[i]) {
             tmp = ((double) meth[i])/((double)(meth[i]+umeth[i]));
-            tmp2 = CI(umeth[i], meth[i], 1);
+            tmp2 = CI(umeth[i], meth[i], 1, 3.2905267315);
             if(tmp2 < average && tmp < minCI && fabs(tmp-average) > 0.05) break;
-            tmp2 = CI(umeth[i], meth[i], 0);
+            tmp2 = CI(umeth[i], meth[i], 0, 3.2905267315);
             if(tmp2 > average && tmp > maxCI && fabs(tmp-average) > 0.05) break;
         }
     }
@@ -285,9 +285,9 @@ void getThresholds(strandMeth *m, int which, int *lthresh, int *rthresh) {
     for(i=middle+1; i<m->l; i++) {
         if(meth[i] || umeth[i]) {
             tmp = ((double) meth[i])/((double)(meth[i]+umeth[i]));
-            tmp2 = CI(umeth[i], meth[i], 1);
+            tmp2 = CI(umeth[i], meth[i], 1, 3.2905267315);
             if(tmp2 < average && tmp < minCI && fabs(tmp-average) > 0.05) break;
-            tmp2 = CI(umeth[i], meth[i], 0);
+            tmp2 = CI(umeth[i], meth[i], 0, 3.2905267315);
             if(tmp2 > average && tmp > maxCI && fabs(tmp-average) > 0.05) break;
         }
     }
